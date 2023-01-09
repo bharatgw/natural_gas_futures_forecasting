@@ -1,0 +1,193 @@
+---
+title: "Winter is coming: What do the futures hold?"
+subtitle: "ECON207 G1"
+author: "Bharat Gangwani"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+bibliography: bib.bib
+output: 
+  pdf_document: 
+    fig_caption: yes
+    fig_crop: no
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(lubridate)
+library(scales)
+library(tsibble)
+library(readxl)
+library(sandwich)
+library(forecast)
+library(tidyverse)
+library(car)
+
+og = read_xls("NG2_N.XLS")[, c('"Date"', "Close1")]
+tempdata = read.csv("USC00218450.csv")[, c("DATE", "TAVG")]
+importdata = read_xlsx("NG_MOVE_IMPC_S1_M.xlsx")
+storagedata = read_xlsx("NG_STOR_SUM_A_EPG0_SAT_MMCF_M.xlsx")
+```
+
+```{r, include = FALSE}
+df = og
+colnames(df)[1] = "Date"
+colnames(tempdata)[1] = "Date"
+tempdata$Date = tsibble::yearmonth(tempdata$Date)
+importdata$Date = yearmonth(importdata$Date)
+storagedata$Date = yearmonth(storagedata$Date)
+storagedata = storagedata %>%
+  group_by(Date) %>%
+  summarise(Storage = mean(Storage))
+
+df = df %>%
+  mutate(Date = tsibble::yearmonth(Date)) %>%
+  group_by(Date) %>%
+  summarise(Price = log(mean(Close1)), Month = factor(first(month.name[month(Date)])) ) %>%
+  merge(tempdata, by = "Date", all.x = TRUE) %>%
+  merge(importdata, by = "Date", all.x = TRUE) %>%
+  merge(storagedata, by = "Date", all.x = TRUE)
+
+df = drop_na(df)
+df$t = 1:nrow(df)
+df$Month = relevel(df$Month, "January")
+```
+
+## Introduction
+Natural gas supports household/commercial heating, electricity generation and applications in industrial production. Consequently, securing stable supply for natural gas is of significant interest to many industry and government stakeholders. Its importance has been underscored this year as Russia largely shut its natural gas supply to European countries in retaliation against the sanctions imposed for its invasion of Ukraine. Natural gas consumption in Europe has declined by more than 10% so far this year compared to last year while prices in the United States have climbed to their highest summertime peak since 2008 [@ieaNaturalGasMarkets2022]. While Europe has been able to secure its natural gas reserves for the coming winter, significant challenges may arise next year when these reserves are depleted and require replenishment [@englandEuropeRiskMuch2022]. It's this necessity to safeguard and protect future supply which motivates this paper's central question: **Does a decrease in forecasted temperatures in the United States increase the price of natural gas futures?**
+
+Natural gas futures are contracts which obligate the buyer to purchase a given quantity of natural gas at a predetermined price sometime in the future. Both consumers and producers of natural gas can use these contracts to hedge their risk by safeguarding themselves from significant price movements. As a result, obtaining a reliable estimate for the responsiveness of the price of natural gas futures to changes in temperature and temperature forecasts can allow companies to be able to better hedge their risk within volatile global commodity markets. 
+
+In this project, I specifically utilize the Henry Hub Natural Gas futures due to their high liquidity and standardized terms of contract [@cmegroupHenryHubNatural2022]. Additional controls incorporated will include natural gas imports and amount held in storage. One would expect the amount of contemporary natural gas imports and storage in the country to be positively and negatively correlated with the price of natural gas futures respectively. @nickWhatDrivesNatural2014 make a more rigorous case for the inclusion of natural gas imports and amount held in storage within their model. Their paper informs my variable selection as well. Historical price, storage and imports data is obtained from @eiaNaturalGasData2022. The average monthly temperature data is obtained from the GSOM, University of Minnesota St. Paul Station dataset [@lawrimoreGlobalSummaryMonth2016]. Within my analysis, I utilize leading temperature data as a proxy for temperature forecasts making the assumption that temperature forecasts would be close to the actual temperatures. This is due to the unavailability of historical data for temperature forecasts.
+
+Since the futures price data is time series, I expected and experienced a significant amount of noise in the dataset along with serial correlation between the error terms. There is a genuine concern of inconsistent coefficients in cases where I include AR terms and yet experience serial correlation. Consequently, I utilize ARDL and difference models to both exploit serial correlation to increase the model's predictive power and minimize the likelihood of inconsistent coefficient estimates. In the end, I create a dynamically complete model incorporating a linear deterministic trend, seasonal variation and appropriate autocorrelation terms to explain the changes in the price of natural gas futures. The final model validates part of my initial hypothesis. While a contemporaneous decrease in average monthly temperature increases prices of natural gas futures, temperature forecasts do not seem to have a significant effect on them.
+
+## Data and Methodology
+
+The dataset I use throughout the analysis contains 5 predictors and 1 predicted variable. The dataset has 388 observations at the country level and the unit of time is a month. In the case of Price, daily data was grouped by and averaged on the year-month level. Storage was also available at a weekly frequency; it was upscaled to the month level as well. Other series were directly available at the monthly frequency. A short description of the variable and its source is provided in the table below:
+
+| Variable 	| Description                                                               | Min       	| Median    	| Max       	| Source 	|
+|----------	|-------------------------------------------------------------------------	|-----------	|-----------	|-----------	|--------	|
+| Price    	| Log price of the natural gas future at month t                          	| 0.15      	| 1.09      	| 2.6       	| EIA    	|
+| t        	| A sequence of integers [1, 388]                                         	| 1         	| 194.5     	| 388       	| na     	|
+| Month    	| A set of dummy variables for the 12 months                              	| na        	| na        	| na        	| na     	|
+| TAVG     	| The average monthly temperature recorded at the University of Minnesota 	| -15.40    	| 9.00      	| 25.62     	| NCEI   	|
+| Imports  	| Volume of natural gas imported by the United States                     	| 117,009   	| 258,011   	| 267,573   	| EIA    	|
+| Storage  	| Volume of natural gas held in storage in the United States              	| 5,041,971 	| 6,776,630 	| 6,737,241 	| EIA    	|
+
+The price time series seems to possess weak seasonality and an additive trend, as suggested by the changes in its average price level over the years in Figure 1. This justifies the addition of a trend regressor and a vector of seasonality (month) dummies to our regression specification.
+
+```{r, include = FALSE}
+theme_set(theme_minimal())
+
+dfm_plot = df[2022 > year(df$Date) & year(df$Date) >= 2012, ]
+xaxis = date(sprintf("%d-%02d-%02d", 2012, month(dfm_plot$Date), day(dfm_plot$Date)))
+dfm_plot$Year = factor(year(dfm_plot$Date))
+```
+
+```{r}
+ggplot(dfm_plot, aes(x = xaxis, y = Price)) +
+  geom_line(aes(color = Year )) +
+  xlab("Months") +
+  ylab("Price") +
+  scale_x_date(labels = date_format("%b")) +
+  ggtitle("Monthly prices over the years")
+```
+
+
+Consequently, the first model I propose is the following:
+$$
+Price_t = \beta_0 + \beta_1TAVG_t + \beta_2Imports_t + \beta_3Storage_t + \alpha_0t + \sum_{i=2}^{12}\alpha_iMonth_i + \epsilon_t
+$$
+where $\alpha_iMonth_i$ are the set of 11 dummy vectors for the months excluding January.
+
+```{r}
+# Linear Regression
+lr2 = lm(Price ~ . - Date,df)
+summary(lr2, vcov = NeweyWest)$r.squared
+
+# Correlogram for residuals
+checkresiduals(lr2, lag = 12)
+```
+
+However, I observe that the while the model has a $R^2 = 71.36\%$, it also has significant serial correlation among its noise terms. This is confirmed by the Breusch-Godfrey test for lag 12 as well. The test statistic is 46.785 and is hence quite significant.
+
+Consequently, I would need lagged terms in the specification to address the serial correlation. After several iterations trying to minimize serial correlation without introducing significant multicollinearity and increasing the variance of the estimators, I find AR(1) with 6 leading $TAVG$ terms to serve as proxies for temperature forecasts as the most appropriate model. Its population regression function is as follows:
+$$
+Price_t = \beta_0 + \sum_{i=0}^6\beta_{1+i}TAVG_{t+i} + \beta_2Imports_t + \beta_3Storage_t + \beta_4Price_{t-1} + \alpha_0t + \sum_{i=2}^{12}\alpha_iMonth_i + \epsilon_t
+$$
+The significance of the coefficients of the leading terms would determine the validity of my initial hypothesis. Additionally, the joint F-test restricting the coefficients of the $TAVG_t$ terms to be 0 will determine whether their addition to the model adds significant explanatory power. These are discussed further in the next section.
+
+## Results
+
+The final output of the model specified above is estimated below. We can observe that all the seasonality dummies are significant at least at the 10% level. All other variables are statistically significant at the 5% level as well except some of the $TAVG$ leading terms. The seasonality dummies suggest that futures prices tend higher relative to January throughout the rest of the year and peak around June. This may be a result of producers and consumers locking in trades at the given price levels for the coming winter. As expected, the price of natural gas futures is affected positively by the quantity of imports and negatively by the amount held in storage. Prices are also significantly persistent, as suggested by the the coefficient of LPrice1 taking the highest numerical value in the estimation. Finally, the model output suggests that a contemporaneous drop in temperature increases price of natural gas futures today by 0.935%. However, a unit increase in the forecasted temperature for 4 months later appears to increase the price of gas futures while a unit increase in the forecasted temperature for 3 months later appears to conversely decrease it. Since the significance and magnitude of these coefficients is almost similar, they appear to cancel out. These effects of changes in temperature are independent of seasonality.
+
+```{r}
+dfardl = df
+
+createLag = function(dfc, n){
+  c(rep(NA, n), dfc[1:(length(dfc)-n)])
+}
+
+createLead = function(dfc, n){
+  c(dfc[(1+n):length(dfc)], rep(NA, n))
+}
+# ARDL(p, q)
+p = 1
+q = 6
+
+for (i in 1:p){
+  dfardl[, sprintf("LPrice%s", i)] = createLag(df$Price, i)
+}
+
+for (i in 1:q){
+  dfardl[, sprintf("LTAVG%s", i)] = createLead(df$TAVG, i)
+}
+
+ardl1 = lm(Price ~ . - Date, dfardl)
+sumreg = summary(ardl1, vcov = NeweyWest)
+coef(sumreg)
+```
+
+```{r}
+sumreg$r.squared
+```
+Due to the high persistence in the data, the $R^2 = 95.84\%$ is also quite high.
+
+```{r}
+# Correlogram for residuals
+checkresiduals(ardl1, lag = 12)
+```
+
+Finally, the inclusion of the AR(1) term appears to have alleviated the serial correlation slightly. The residuals appear more normally distributed around 0 while their correlations are more erratic and hence harder to formalize into a model. Consequently, following the principle of parsimony and due to a lack of further evident patterns to exploit in the serial correlations, I conclude with this model despite Breusch-Godfrey test still suggesting significant serial correlation.
+
+Utilizing a joint F-test, we test the restrictive hypothesis $(TAVG_{t+i}=0)\forall i\in[0,6]$ The result of the joint F-test suggests that there is evidence at the 1% level to reject the hypothesis that the coefficients of these lagged terms are restricted to 0. Hence, these coefficients retain significance within the model and improve its explanatory power.
+
+```{r}
+restrictions = c("TAVG = 0", "LTAVG1 = 0", "LTAVG2 = 0", "LTAVG3 = 0", 
+                 "LTAVG4 = 0", "LTAVG5 = 0", "LTAVG6 = 0")
+linearHypothesis(ardl1, restrictions)
+```
+
+
+## Conclusion
+
+In this project, I develop a dynamically complete model to predict the price of natural gas futures. Using the model, I identify the impact that changes in the average temperature and average temperature forecasts in the United States have on the price of natural gas futures. I propose AR(1) with 6 leading $TAVG$ terms as the final model due to its significant $R^2$, inclusion of sufficient leading temperature terms as proxies for temperature forecasts, a high number of significant coefficients and minimized serial correlation among the error terms. The model tracks the original Price series well. However, that is primarily a consequence of strong persistence within the series as suggested by the high coefficient estimate of the AR(1) term.
+
+```{r}
+# Fitted values plot
+plot(ardl1$fitted.values, type = "l", main = "Estimated price over time")
+lines(dfardl$Price, type = "l", col = "blue")
+```
+Despite the persistence, however, 3 out of the 6 $TAVG$ terms are statistically significant at the 10% level. The joint F-test also delivers sufficient evidence to suggest that the coefficients of all 6 terms are not equal to 0 and hence they improve the explanatory power of the model. As a result, I confidently conclude in response to the original question that while an increase in contemporaneous temperature decreases the prices of natural gas futures, temperature forecasts appear to have little effect on them.
+
+## References
+
+
+
+
+
+
+
