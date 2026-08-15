@@ -12,8 +12,9 @@ The submitted analysis finds a relationship between contemporaneous temperature 
 
 | Path | Purpose |
 | --- | --- |
-| `BharatG_Project.Rmd` | Full R Markdown analysis and narrative. |
-| `BharatG_Project.pdf` | Rendered submission. |
+| [`BharatG_Project.Rmd`](./BharatG_Project.Rmd) | Full R Markdown analysis and narrative. |
+| [`BharatG_Project.pdf`](./BharatG_Project.pdf) | Rendered submission. |
+| [`DATA_SOURCES.md`](./DATA_SOURCES.md) | Missing-input inventory and reconstruction guidance. |
 
 ## Reproducibility status
 
