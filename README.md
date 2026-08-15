@@ -8,6 +8,12 @@ This project asks whether changes in United States temperature forecasts affect 
 
 The submitted analysis finds a relationship between contemporaneous temperature and futures prices but limited evidence that the proxy for forecast temperatures adds explanatory value.
 
+## Example output
+
+![Estimated natural-gas futures price over time](./assets/project-preview.png)
+
+An example fitted-price output from the submitted time-series model.
+
 ## Repository contents
 
 | Path | Purpose |
